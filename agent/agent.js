@@ -4,7 +4,8 @@ import fs from "fs-extra";
 import path from "path";
 import { exec, spawn, spawnSync } from "child_process";
 
-const SERVER = "https://apiwebprintrdbi.siunand.my.id";
+// const SERVER = "https://apiwebprintrdbi.siunand.my.id";
+const SERVER = "http://localhost:5000";
 
 const runCmd = (cmd) =>
   new Promise((resolve, reject) => {
@@ -62,6 +63,9 @@ const contentTypeToExt = (ct) => {
 
 async function checkQueue() {
   try {
+    // heartbeat: inform server the agent is alive
+    try { await axios.post(`${SERVER}/api/agent/ping`, {}, { timeout: 5000 }); } catch {}
+
     const { data: jobs } = await axios.get(`${SERVER}/api/queue`, { timeout: 15000 });
     for (const job of jobs) {
       console.log(`📥 Mengambil file (subset jika ada): ${job.originalName}`);
