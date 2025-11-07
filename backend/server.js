@@ -5,8 +5,27 @@ import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import fs from "fs";
 import { PDFDocument } from "pdf-lib";
+import { spawnSync } from "child_process";
 
 const app = express();
+
+const allowedOrigins = [
+  "https://webprintrdbi.siunand.my.id",
+  "http://localhost:5173",
+];
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true); // non-browser / curl
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error("Origin not allowed by CORS"));
+    },
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false,
+  })
+);
 
 // pastikan folder uploads ada
 const UPLOAD_DIR = path.resolve("uploads");
@@ -23,7 +42,17 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-app.use(cors());
+function pickImageConvertCmd() {
+  const candidates = process.platform === "win32" ? ["magick"] : ["convert", "magick"];
+  for (const c of candidates) {
+    try {
+      const r = spawnSync(c, ["-version"]);
+      if (r.status === 0) return c;
+    } catch {}
+  }
+  return null;
+}
+
 app.use("/uploads", express.static(UPLOAD_DIR));
 
 let printQueue = [];
@@ -102,11 +131,49 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
 
   const pagesArray = parsePages(pages, totalPages);
 
+  // convert non-PDF uploads to PDF when possible (images via ImageMagick, docs via LibreOffice)
+  let storedPath = req.file.path;
+ try {
+    const ext = path.extname(storedPath).toLowerCase();
+    if (ext !== ".pdf") {
+      const base = path.basename(storedPath, ext);
+      const targetPdf = path.join(UPLOAD_DIR, `${base}.pdf`);
+      const isImage = [".png",".jpg",".jpeg",".bmp",".gif",".webp",".tiff"].includes(ext);
+      const isDoc = [".doc",".docx",".ppt",".pptx",".xls",".xlsx",".odt"].includes(ext);
+
+      if (isImage) {
+        const imgCmd = pickImageConvertCmd();
+        if (imgCmd) {
+          const r = spawnSync(imgCmd, [storedPath, targetPdf], { stdio: "ignore", timeout: 30000 });
+          if (r.status === 0 && fs.existsSync(targetPdf)) {
+            try { fs.unlinkSync(storedPath); } catch {}
+            storedPath = targetPdf;
+          } else {
+            console.warn("Konversi gambar gagal. Lanjutkan file asli.");
+          }
+        } else {
+          console.warn("ImageMagick tidak ditemukan di server. Lewati konversi gambar.");
+        }
+      } else if (isDoc) {
+        const soffice = process.env.LIBREOFFICE_CMD || "soffice";
+        const r = spawnSync(soffice, ["--headless","--convert-to","pdf","--outdir",UPLOAD_DIR,storedPath], { stdio: "ignore", timeout: 90000 });
+        if (r.status === 0 && fs.existsSync(targetPdf)) {
+          try { fs.unlinkSync(storedPath); } catch {}
+          storedPath = targetPdf;
+        } else {
+          console.warn("Konversi dokumen gagal. Lanjutkan file asli.");
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Konversi otomatis ke PDF gagal, lanjutkan dengan file asli:", e?.message || e);
+  }
+
   const job = {
     id: uuidv4(),
     originalName: req.file.originalname,
-    fileName: req.file.filename,
-    filePath: req.file.path,
+    fileName: path.basename(storedPath),
+    filePath: storedPath,
     status: "pending",
     createdAt: new Date(),
     settings: {

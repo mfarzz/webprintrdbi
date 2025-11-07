@@ -36,11 +36,26 @@ export default function App() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploaded = e.target.files?.[0];
-    if (uploaded && uploaded.type === "application/pdf") {
-      setFile(uploaded);
+    if (!uploaded) return;
+    const name = uploaded.name.toLowerCase();
+    const ext = name.split('.').pop() || '';
+
+    const isPdf = uploaded.type === "application/pdf" || ext === "pdf";
+    const isImage = uploaded.type.startsWith("image/") || ["png","jpg","jpeg","gif","webp","bmp","tiff"].includes(ext);
+    const isDoc = ["doc","docx","ppt","pptx","xls","xlsx","odt"].includes(ext);
+
+    if (!isPdf && !isImage && !isDoc) {
+      alert("Tipe file tidak didukung. Gunakan PDF, Gambar, atau Dokumen Office.");
+      return;
+    }
+
+    setFile(uploaded);
+    if (isPdf || isImage) {
       setPreviewUrl(URL.createObjectURL(uploaded));
     } else {
-      alert("Hanya file PDF yang diperbolehkan!");
+      // untuk dokumen office, tidak bisa preview di browser; server akan konversi ke PDF saat upload
+      setPreviewUrl("");
+      showToast("Dokumen akan dikonversi ke PDF di server sebelum dicetak", "info");
     }
   };
 
@@ -111,6 +126,9 @@ export default function App() {
       const res = await axios.post("https://apiwebprintrdbi.siunand.my.id/api/upload", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+      // const res = await axios.post("http://localhost:5000/api/upload", formData, {
+      //   headers: { "Content-Type": "multipart/form-data" },
+      // });
       const job = res.data?.job;
       if (!job?.id) {
         showToast("File terkirim, tapi tidak mendapat ID job", "error");
@@ -127,6 +145,7 @@ export default function App() {
       for (let i = 0; i < 60; i++) { // ~2 menit @ 2s
         try {
           const { data: pending } = await axios.get("https://apiwebprintrdbi.siunand.my.id/api/queue");
+          // const { data: pending } = await axios.get("http://localhost:5000/api/queue");
           const stillPending = Array.isArray(pending) && pending.some((j: { id: string }) => j.id === jobId);
           if (!stillPending) {
             printed = true;
@@ -159,11 +178,11 @@ export default function App() {
         <h1 className="text-3xl font-bold text-center text-blue-600 mb-8">WebPrint RDBI</h1>
 
         {/* Upload or Preview */}
-        {!previewUrl ? (
+        {!file ? (
           <label className="block border-2 border-dashed border-gray-300 rounded-lg p-8 text-center bg-gray-50 cursor-pointer">
             <CloudArrowUpIcon className="w-12 h-12 text-gray-400 mb-3 mx-auto" />
-            <p className="text-gray-700 font-medium mb-1">Upload file PDF kamu di sini</p>
-            <p className="text-sm text-gray-500 mb-3">Klik untuk memilih file</p>
+            <p className="text-gray-700 font-medium mb-1">Upload file kamu di sini</p>
+            <p className="text-sm text-gray-500 mb-3">PDF, Gambar (PNG/JPG), atau Dokumen Office (DOCX/PPTX/XLSX)</p>
             <input
   type="file"
   accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,image/*"
@@ -174,17 +193,27 @@ export default function App() {
         ) : (
           <>
             <div className="mt-2 text-sm text-gray-600">📎 {file?.name}</div>
-            {/* Preview (react-pdf-viewer) */}
+            {/* Preview area: PDF via viewer, Image via <img>, Docs show placeholder */}
             <div className="mt-4 border border-black/5 rounded-2xl p-2 sm:p-4 bg-black/5">
               <div className="h-[75vh]">
-                <Worker workerUrl={workerUrl}>
-                  <Viewer
-                    fileUrl={previewUrl}
-                    defaultScale={SpecialZoomLevel.PageWidth}
-                    onDocumentLoad={(e: DocumentLoadEvent) => setNumPages(e.doc.numPages)}
-                    plugins={[defaultLayout]}
-                  />
-                </Worker>
+                {previewUrl && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) && (
+                  <Worker workerUrl={workerUrl}>
+                    <Viewer
+                      fileUrl={previewUrl}
+                      defaultScale={SpecialZoomLevel.PageWidth}
+                      onDocumentLoad={(e: DocumentLoadEvent) => setNumPages(e.doc.numPages)}
+                      plugins={[defaultLayout]}
+                    />
+                  </Worker>
+                )}
+                {previewUrl && file.type.startsWith("image/") && (
+                  <img src={previewUrl} alt={file.name} className="mx-auto max-w-full max-h-[72vh] object-contain rounded" />
+                )}
+                {!previewUrl && (
+                  <div className="h-full flex items-center justify-center text-sm text-gray-600">
+                    Dokumen tidak dapat dipreview di browser. Akan dikonversi ke PDF di server saat dicetak.
+                  </div>
+                )}
               </div>
             </div>
               <div className="flex justify-center mt-10">
