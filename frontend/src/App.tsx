@@ -108,7 +108,7 @@ export default function App() {
     }
 
     try {
-      const res = await axios.post("http://localhost:5000/api/upload", formData, {
+      const res = await axios.post("https://apiwebprintrdbi.siunand.my.id/api/upload", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       const job = res.data?.job;
@@ -126,7 +126,7 @@ export default function App() {
       let printed = false;
       for (let i = 0; i < 60; i++) { // ~2 menit @ 2s
         try {
-          const { data: pending } = await axios.get("http://localhost:5000/api/queue");
+          const { data: pending } = await axios.get("https://apiwebprintrdbi.siunand.my.id/api/queue");
           const stillPending = Array.isArray(pending) && pending.some((j: { id: string }) => j.id === jobId);
           if (!stillPending) {
             printed = true;
@@ -165,11 +165,11 @@ export default function App() {
             <p className="text-gray-700 font-medium mb-1">Upload file PDF kamu di sini</p>
             <p className="text-sm text-gray-500 mb-3">Klik untuk memilih file</p>
             <input
-              type="file"
-              accept=".pdf"
-              onChange={handleFileChange}
-              className="hidden"
-            />
+  type="file"
+  accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,image/*"
+  onChange={handleFileChange}
+  className="hidden"
+/>
           </label>
         ) : (
           <>
