@@ -1,17 +1,27 @@
 {
   "name": "agent",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A small Node.js agent app",
+  "main": "agent.js",
+  "bin": "agent.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "start": "node agent.js",
+  "build": "pkg . --targets node18-win-x64 --output agent.exe --no-bytecode --public-packages '*' --no-warnings --no-windows-console"
+},
+  "pkg": {
+    "assets": [
+      "SumatraPDF.exe",
+      "SumatraPDF-settings.txt",
+      ".env"
+    ],
+    "options": {
+      "no-windows-console": true
+    }
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "module",
   "dependencies": {
-    "axios": "^1.13.2",
     "fs-extra": "^11.3.2"
   }
 }

@@ -1,11 +1,44 @@
-// ...existing code...
-import axios from "axios";
-import fs from "fs-extra";
-import path from "path";
-import { exec, spawn, spawnSync } from "child_process";
+const { exec, spawn, spawnSync } = require("child_process");
+const path = require("path");
+const fs = require("fs");
+
 
 // const SERVER = "https://apiwebprintrdbi.siunand.my.id";
 const SERVER = "http://localhost:5000";
+
+// --- fetch helpers (Node 18+ has global fetch) ---
+function _withTimeout(timeout) {
+  if (!timeout) return { signal: undefined, clear: () => {} };
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(new Error("Timeout")), timeout);
+  return { signal: controller.signal, clear: () => clearTimeout(id) };
+}
+
+async function fetchOk(url, { timeout, ...options } = {}) {
+  const { signal, clear } = _withTimeout(timeout);
+  try {
+    const res = await fetch(url, { ...options, signal });
+    if (!res.ok) {
+      const err = new Error(`Request failed with status ${res.status}`);
+      err.status = res.status;
+      try { err.body = await res.text(); } catch {}
+      throw err;
+    }
+    return res;
+  } finally {
+    clear();
+  }
+}
+
+async function fetchJson(url, { method = "GET", headers = {}, body, timeout } = {}) {
+  const res = await fetchOk(url, {
+    method,
+    headers: { "content-type": "application/json", ...headers },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    timeout,
+  });
+  return res.json();
+}
 
 const runCmd = (cmd) =>
   new Promise((resolve, reject) => {
@@ -61,26 +94,51 @@ const contentTypeToExt = (ct) => {
   return "";
 };
 
+let _checking = false;
+const _recentProcessed = new Map();
+
 async function checkQueue() {
+   if (_checking) return; 
+  _checking = true;
   try {
+    const now = Date.now();
+    for (const [k, exp] of _recentProcessed) {
+      if (exp <= now) _recentProcessed.delete(k);
+    }
     // heartbeat: inform server the agent is alive
-    try { await axios.post(`${SERVER}/api/agent/ping`, {}, { timeout: 5000 }); } catch {}
+    try { await fetchOk(`${SERVER}/api/agent/ping`, { method: "POST", timeout: 5000, headers: { "content-type": "application/json" }, body: JSON.stringify({}) }); } catch {}
 
-    const { data: jobs } = await axios.get(`${SERVER}/api/queue`, { timeout: 15000 });
+    const jobsRaw = await fetchJson(`${SERVER}/api/queue`, { timeout: 15000 });
+    const jobsCount = Array.isArray(jobsRaw) ? jobsRaw.length : typeof jobsRaw;
+    console.log("jobs received:", jobsCount);
+    const jobs = (Array.isArray(jobsRaw) ? jobsRaw : []).filter(j => !_recentProcessed.has(j.id));
     for (const job of jobs) {
-      console.log(`📥 Mengambil file (subset jika ada): ${job.originalName}`);
-
+      console.log(`📥 Mengambil file (subset jika ada): ${job.originalName}`, "copies:", job.settings?.copies);
+      _recentProcessed.set(job.id, Date.now() + 60_000);
       // unduh file subset (atau asli) dan simpan dengan ekstensi yang benar
       const fileUrl = `${SERVER}/api/print-file/${job.id}`;
-      const fileRes = await axios.get(fileUrl, { responseType: "arraybuffer", timeout: 60000 });
-      const ct = (fileRes.headers["content-type"] || "").toLowerCase();
+      let fileRes;
+      try {
+        fileRes = await fetchOk(fileUrl, { timeout: 60000 });
+      } catch (err) {
+        const status = err?.status;
+        if (status === 410) {
+          console.warn(`⚠️ File untuk job ${job.id} sudah tidak tersedia (410). Mengabaikan job.`);
+          continue;
+        }
+        throw err;
+      }
+      const ct = (fileRes.headers.get("content-type") || "").toLowerCase();
       let ext = contentTypeToExt(ct);
       if (!ext) {
         const n = (job.fileName || job.originalName || "").toLowerCase();
         ext = path.extname(n) || ".pdf";
       }
       const localPath = `./${job.id}${ext}`;
-      fs.writeFileSync(localPath, fileRes.data);
+      {
+        const buf = Buffer.from(await fileRes.arrayBuffer());
+        fs.writeFileSync(localPath, buf);
+      }
 
       console.log("🖨️ Mempersiapkan cetak...");
       const printer = job.settings?.printer?.trim();
@@ -131,7 +189,6 @@ async function checkQueue() {
         console.warn("⚠️ Grayscale gagal. Mencetak berwarna:", e.message);
         fileToPrint = localPath;
       }
-
       // cetak sesuai tipe
       for (let i = 0; i < copies; i++) {
         if (isPdf) {
@@ -152,14 +209,20 @@ async function checkQueue() {
       }
 
       console.log("✅ Selesai mencetak:", job.originalName);
-      await axios.post(`${SERVER}/api/queue/${job.id}/done`, {}, { timeout: 15000 });
+      try {
+        await fetchOk(`${SERVER}/api/queue/${job.id}/done`, { method: "POST", timeout: 15000, headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
+      } catch (e) {
+        console.warn("⚠️ Gagal mengirim done ke server:", e.message);
+      }
 
       // bersihkan file lokal
-      try { if (fs.existsSync(localPath)) fs.removeSync(localPath); } catch {}
-      if (grayTmp) { try { if (fs.existsSync(grayTmp)) fs.removeSync(grayTmp); } catch {} }
+      try { if (fs.existsSync(localPath)) fs.unlinkSync(localPath); } catch {}
+      if (grayTmp) { try { if (fs.existsSync(grayTmp)) fs.unlinkSync(grayTmp); } catch {} }
     }
   } catch (error) {
     console.error("Loop error:", error.message);
+  } finally {
+    _checking = false;
   }
 }
 

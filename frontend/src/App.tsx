@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-import axios from "axios";
 import { CloudArrowUpIcon } from "@heroicons/react/24/solid";
-import { Worker, Viewer, SpecialZoomLevel, type DocumentLoadEvent } from "@react-pdf-viewer/core";
+import { SpecialZoomLevel, Viewer, Worker, type DocumentLoadEvent } from "@react-pdf-viewer/core";
 import "@react-pdf-viewer/core/lib/styles/index.css";
 import { defaultLayoutPlugin } from "@react-pdf-viewer/default-layout";
 import "@react-pdf-viewer/default-layout/lib/styles/index.css";
+import axios from "axios";
+import { useEffect, useState } from "react";
 
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.js?url";
 
@@ -21,6 +21,7 @@ export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [numPages, setNumPages] = useState<number | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>("");
+  const [previewIsPdf, setPreviewIsPdf] = useState<boolean>(false);
   const [previewReady, setPreviewReady] = useState<boolean>(false); // tampilkan preview + setting hanya kalau true
   const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false); // indikator konversi dokumen
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -55,12 +56,15 @@ export default function App() {
 
   setFile(uploaded);
   setNumPages(null);
+  setPreviewIsPdf(false);
   setPreviewUrl("");
   setPreviewReady(false);
 
     if (isPdf || isImage) {
-      setPreviewUrl(URL.createObjectURL(uploaded));
-      setPreviewReady(true); // langsung siap
+      const objUrl = URL.createObjectURL(uploaded);
+      setPreviewUrl(objUrl);
+      setPreviewIsPdf(isPdf);
+      setPreviewReady(true);
       return;
     }
 
@@ -73,6 +77,7 @@ export default function App() {
       const resp = await axios.post('/api/preview', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       if (resp.data?.previewUrl) {
         setPreviewUrl(resp.data.previewUrl);
+        setPreviewIsPdf(String(resp.data.previewUrl).toLowerCase().endsWith(".pdf"));
         setPreviewReady(true);
         showToast('Preview siap', 'success');
       } else {
@@ -92,6 +97,18 @@ export default function App() {
     }
     setIsPreviewLoading(false);
   };
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl && previewUrl.startsWith("blob:")) {
+        try { URL.revokeObjectURL(previewUrl); 
+
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, [previewUrl]);
 
   // poll backend health & agent status
   useEffect(() => {
@@ -192,7 +209,7 @@ export default function App() {
       let printed = false;
       for (let i = 0; i < 60; i++) { // ~2 menit @ 2s
         try {
-          // const { data: pending } = await axios.get("https://apiwebprintrdbi.siunand.my.id/api/queue");
+          // const { data: pending } = await axios.get("http://localhost:5000/api/queue");
           const { data: pending } = await axios.get("/api/queue");
           const stillPending = Array.isArray(pending) && pending.some((j: { id: string }) => j.id === jobId);
           if (!stillPending) {
@@ -292,19 +309,19 @@ export default function App() {
             {/* Preview area: PDF via viewer, Image via <img>, Docs show placeholder */}
             <div className="mt-4 border border-black/5 rounded-2xl p-2 sm:p-4 bg-black/5">
               <div className="h-[75vh]">
-                {previewUrl && previewUrl.toLowerCase().endsWith('.pdf') && (
+                {previewUrl && previewIsPdf && (
                   <Worker workerUrl={workerUrl}>
-                    <Viewer
-                      fileUrl={previewUrl}
-                      defaultScale={SpecialZoomLevel.PageWidth}
-                      onDocumentLoad={(e: DocumentLoadEvent) => setNumPages(e.doc.numPages)}
-                      plugins={[defaultLayout]}
-                    />
-                  </Worker>
+                     <Viewer
+                       fileUrl={previewUrl}
+                       defaultScale={SpecialZoomLevel.PageWidth}
+                       onDocumentLoad={(e: DocumentLoadEvent) => setNumPages(e.doc.numPages)}
+                       plugins={[defaultLayout]}
+                     />
+                   </Worker>
                 )}
-                {previewUrl && file.type.startsWith("image/") && (
-                  <img src={previewUrl} alt={file.name} className="mx-auto max-w-full max-h-[72vh] object-contain rounded" />
-                )}
+                {previewUrl && !previewIsPdf && file.type.startsWith("image/") && (
+                   <img src={previewUrl} alt={file.name} className="mx-auto max-w-full max-h-[72vh] object-contain rounded" />
+                 )}
                 {!previewUrl && (
                   <div className="h-full flex items-center justify-center text-sm text-gray-600">
                     Dokumen tidak dapat dipreview di browser. Akan dikonversi ke PDF di server saat dicetak.
